@@ -89,7 +89,8 @@ final class NotchUI {
         if chatOpen { return .chat }
         if !bubbles.isEmpty { return .bubbles }
         if expanded { return .expanded }
-        return pomo.isIdle ? .idle : .live
+        // Unread messages keep the wings out even with no timer running, so a missed bubble stays visible.
+        return pomo.isIdle && unread == 0 ? .idle : .live
     }
 
     /// Ear (concave flare into the top edge) and bottom corner radius per state.
@@ -281,13 +282,21 @@ struct LiveView: View {
 
             Color.clear.frame(width: notch.width)
 
-            // No digit animation here: collapsed, it only redraws a few glyphs per second.
-            Text(clock(pomo.remaining))
-                .font(geist(13, .semibold))
-                .monospacedDigit()
-                .foregroundStyle(pomo.running ? pal.fg : pal.dim)
-                .padding(.trailing, 14)
-                .frame(width: wing, alignment: .trailing)
+            Group {
+                if pomo.isIdle && unread > 0 {
+                    Text(unread == 1 ? "1 mensaje" : "\(unread) mensajes")
+                        .font(geist(12, .semibold))
+                        .foregroundStyle(bubbleGreen)
+                } else {
+                    // No digit animation here: collapsed, it only redraws a few glyphs per second.
+                    Text(clock(pomo.remaining))
+                        .font(geist(13, .semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(pomo.running ? pal.fg : pal.dim)
+                }
+            }
+            .padding(.trailing, 14)
+            .frame(width: wing, alignment: .trailing)
         }
         .frame(height: notch.height)
     }

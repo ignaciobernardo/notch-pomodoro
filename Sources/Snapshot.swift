@@ -42,6 +42,11 @@ enum Snapshot {
             ("14-bubble", { app.receiveChat(from: "juan", "¿hacemos 2 más antes de almorzar?") }),
             ("15-bubbles", { app.receiveChat(from: "ana", "dale 🙌") }),
             ("16-live-unread", { app.ui.bubbles = [] }),
+            ("18-idle-unread", {
+                app.ui.chatOpen = false; app.ui.bubbles = []; app.setExpanded(false)
+                pomo.reset(); app.ui.unread = 2
+            }),
+            ("19-bubble-arrives", { app.ui.unread = 0; app.receiveChat(from: "trinidad", "¿empezamos otro?") }),
             ("17-chat", {
                 app.ui.messages = [ChatMessage(from: "juan", text: "¿hacemos 2 más antes de almorzar?", mine: false),
                                    ChatMessage(from: "ana", text: "dale", mine: false),
