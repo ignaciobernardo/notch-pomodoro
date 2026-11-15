@@ -69,12 +69,26 @@ enum Snapshot {
 
     static func render(app: AppDelegate, name: String, dir: String) {
         let n = app.ui.notch
+        // POMO_SNAPSHOT_CLEAN=1: a desktop-like background and the real black camera housing,
+        // for pictures to show people. Default: grey, with the camera outlined in red for checking.
+        let clean = ProcessInfo.processInfo.environment["POMO_SNAPSHOT_CLEAN"] != nil
         let view = ZStack(alignment: .top) {
-            Color(white: 0.9)
+            if clean {
+                LinearGradient(colors: [Color(red: 0.42, green: 0.48, blue: 0.35), Color(red: 0.19, green: 0.23, blue: 0.16)],
+                               startPoint: .top, endPoint: .bottom)
+            } else {
+                Color(white: 0.9)
+            }
             NotchView(ui: app.ui, pomo: app.pomo, onToastAction: {}, onEndEditing: {}, onTogether: {})
-            UnevenRoundedRectangle(bottomLeadingRadius: 9, bottomTrailingRadius: 9)
-                .stroke(Color.red.opacity(0.8), lineWidth: 1)
-                .frame(width: n.width, height: n.height)
+            if clean {
+                UnevenRoundedRectangle(bottomLeadingRadius: 9, bottomTrailingRadius: 9)
+                    .fill(Color.black)
+                    .frame(width: n.width, height: n.height)
+            } else {
+                UnevenRoundedRectangle(bottomLeadingRadius: 9, bottomTrailingRadius: 9)
+                    .stroke(Color.red.opacity(0.8), lineWidth: 1)
+                    .frame(width: n.width, height: n.height)
+            }
         }
         .frame(width: 560, height: 250)
         let r = ImageRenderer(content: view)
