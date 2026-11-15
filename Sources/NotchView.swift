@@ -44,6 +44,16 @@ struct Toast: Equatable {
     static func == (a: Toast, b: Toast) -> Bool { a.id == b.id }
 }
 
+struct ChatMessage: Identifiable, Equatable {
+    let id = UUID()
+    let from: String
+    let text: String
+    let mine: Bool
+}
+
+/// iMessage green, the one colour the notch allows itself.
+let bubbleGreen = Color(red: 0.204, green: 0.78, blue: 0.349)
+
 struct Mate: Identifiable, Equatable {
     let id: String
     var name: String
@@ -52,7 +62,7 @@ struct Mate: Identifiable, Equatable {
 
 @Observable
 final class NotchUI {
-    enum Mode: Equatable { case idle, live, expanded, toast(UUID) }
+    enum Mode: Equatable { case idle, live, expanded, chat, bubbles, toast(UUID) }
 
     var expanded = false
     var toast: Toast?
@@ -66,11 +76,18 @@ final class NotchUI {
     var mates: [Mate] = []
     var searching = false
     var people: Int { mates.count + 1 }
+    /// The group chat: history of this session, the chat panel, and bubbles popping while it's closed.
+    var messages: [ChatMessage] = []
+    var chatOpen = false
+    var bubbles: [ChatMessage] = []
+    var unread = 0
 
     @ObservationIgnored var onSize: ((CGSize) -> Void)?
 
     func mode(_ pomo: Pomodoro) -> Mode {
         if let t = toast { return .toast(t.id) }
+        if chatOpen { return .chat }
+        if !bubbles.isEmpty { return .bubbles }
         if expanded { return .expanded }
         return pomo.isIdle ? .idle : .live
     }
@@ -81,7 +98,7 @@ final class NotchUI {
         switch m {
         case .idle: return (0, 9)
         case .live: return (6, 11)
-        case .expanded, .toast: return (14, 22)
+        case .expanded, .toast, .chat, .bubbles: return (14, 22)
         }
     }
 
@@ -100,6 +117,9 @@ struct NotchView: View {
     var onToastAction: () -> Void
     var onEndEditing: () -> Void
     var onTogether: () -> Void
+    var onOpenChat: () -> Void = {}
+    var onCloseChat: () -> Void = {}
+    var onSend: (String) -> Void = { _ in }
 
     var body: some View {
         let mode = ui.mode(pomo)
@@ -131,10 +151,16 @@ struct NotchView: View {
                     .measured(ui).id(t.id).transition(.slot)
             }
         case .expanded:
-            ExpandedView(ui: ui, pomo: pomo, onEndEditing: onEndEditing, onTogether: onTogether)
+            ExpandedView(ui: ui, pomo: pomo, onEndEditing: onEndEditing, onTogether: onTogether, onOpenChat: onOpenChat)
+                .measured(ui).transition(.slot)
+        case .chat:
+            ChatView(ui: ui, onSend: onSend, onClose: onCloseChat)
+                .measured(ui).transition(.slot)
+        case .bubbles:
+            BubblesView(ui: ui, onOpen: onOpenChat)
                 .measured(ui).transition(.slot)
         case .live:
-            LiveView(pomo: pomo, notch: ui.notch, people: ui.people)
+            LiveView(pomo: pomo, notch: ui.notch, people: ui.people, unread: ui.unread)
                 .measured(ui).transition(.slot)
         case .idle:
             // Sits just inside the hardware notch: invisible until you hover it.
@@ -229,8 +255,9 @@ struct LiveView: View {
     var pomo: Pomodoro
     var notch: CGSize
     var people = 1
-    /// Wider wings while in a group, to fit the people icon beside the ring.
-    static func wing(_ people: Int) -> CGFloat { people > 1 ? 78 : 58 }
+    var unread = 0
+    /// Wider wings while in a group, to fit the people icon and the chat logo beside the ring.
+    static func wing(_ people: Int) -> CGFloat { people > 1 ? 98 : 58 }
 
     var body: some View {
         let wing = Self.wing(people)
@@ -241,7 +268,12 @@ struct LiveView: View {
                 } else {
                     Ring(progress: pomo.progress)
                 }
-                if people > 1 { PeopleIcon(count: people) }
+                if people > 1 {
+                    PeopleIcon(count: people)
+                    Image(systemName: unread > 0 ? "bubble.left.fill" : "bubble.left")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(unread > 0 ? bubbleGreen : (pomo.running ? pal.fg : pal.dim))
+                }
             }
             .foregroundStyle(pomo.running ? pal.fg : pal.dim)
             .padding(.leading, 14)
@@ -267,6 +299,7 @@ struct ExpandedView: View {
     @Bindable var pomo: Pomodoro
     var onEndEditing: () -> Void
     var onTogether: () -> Void
+    var onOpenChat: () -> Void = {}
     @FocusState private var focused: Bool
 
     private var togetherSymbol: String {
@@ -308,6 +341,10 @@ struct ExpandedView: View {
                 } else {
                     RoundButton(symbol: togetherSymbol, active: ui.people > 1 || ui.searching) { onTogether() }
                         .transition(.blurReplace)
+                    if ui.people > 1 {
+                        RoundButton(symbol: ui.unread > 0 ? "bubble.left.fill" : "bubble.left", active: ui.unread > 0) { onOpenChat() }
+                            .transition(.blurReplace)
+                    }
                     RoundButton(symbol: "arrow.counterclockwise") { withAnimation(fluid) { pomo.reset() } }
                         .transition(.blurReplace)
                     RoundButton(symbol: "forward.end.fill") { withAnimation(fluid) { pomo.skip() } }
@@ -582,5 +619,202 @@ struct MateRow: View {
         .padding(.horizontal, 10)
         .frame(height: 26)
         .background(Capsule().fill(pal.fg.opacity(0.08)))
+    }
+}
+
+// MARK: chat
+
+/// The little iMessage tail at the bottom corner on the sender's side. Drawn as its own fill:
+/// merged into the bubble's path, opposite windings would punch a hole where they overlap.
+struct BubbleTail: Shape {
+    var mine: Bool
+
+    func path(in r: CGRect) -> Path {
+        let s: CGFloat = mine ? -1 : 1           // mirror for the right side
+        let x0 = mine ? r.maxX : r.minX, y1 = r.maxY
+        var p = Path()
+        p.move(to: CGPoint(x: x0 + s * 7, y: y1 - 16))
+        p.addCurve(to: CGPoint(x: x0 - s * 5, y: y1),
+                   control1: CGPoint(x: x0 + s * 7, y: y1 - 6),
+                   control2: CGPoint(x: x0 + s * 2, y: y1 - 1.5))
+        p.addCurve(to: CGPoint(x: x0 + s * 14, y: y1 - 4),
+                   control1: CGPoint(x: x0 + s * 3, y: y1 + 0.5),
+                   control2: CGPoint(x: x0 + s * 9, y: y1 - 0.5))
+        p.closeSubpath()
+        return p
+    }
+}
+
+struct Bubble: View {
+    @Environment(\.palette) private var pal
+    var message: ChatMessage
+    var showName: Bool
+
+    var body: some View {
+        VStack(alignment: message.mine ? .trailing : .leading, spacing: 2) {
+            if showName && !message.mine {
+                Text(message.from).font(geist(10.5, .semibold)).foregroundStyle(pal.dim).padding(.horizontal, 12)
+            }
+            Text(message.text)
+                .font(geist(13, .medium))
+                .foregroundStyle(Color.white)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 6)
+                .background {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 15, style: .continuous).fill(bubbleGreen)
+                        BubbleTail(mine: message.mine).fill(bubbleGreen)
+                    }
+                }
+                .frame(maxWidth: 240, alignment: message.mine ? .trailing : .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: message.mine ? .trailing : .leading)
+    }
+}
+
+/// Soft edges top and bottom: bubbles blur away as they scroll out or expire.
+struct EdgeFade: ViewModifier {
+    var top: CGFloat = 0.16
+    var bottom: CGFloat = 0.12
+
+    func body(content: Content) -> some View {
+        content.mask(LinearGradient(stops: [
+            .init(color: .clear, location: 0),
+            .init(color: .black, location: top),
+            .init(color: .black, location: 1 - bottom),
+            .init(color: .clear, location: 1),
+        ], startPoint: .top, endPoint: .bottom))
+    }
+}
+
+extension AnyTransition {
+    /// A bubble rises in from below sharpening, and leaves blurring away.
+    static let bubble = AnyTransition.asymmetric(
+        insertion: .modifier(active: Reveal(hidden: true, y: 10, scale: 0.94, blur: 4),
+                             identity: Reveal(hidden: false, y: 10, scale: 0.94, blur: 4)).animation(fluid),
+        removal: .modifier(active: Reveal(hidden: true, y: -6, scale: 0.98, blur: 6),
+                           identity: Reveal(hidden: false, y: -6, scale: 0.98, blur: 6)).animation(easeOut))
+}
+
+/// Messages that arrive while the chat is closed: they peek out under the camera and fade.
+struct BubblesView: View {
+    @Bindable var ui: NotchUI
+    var onOpen: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Color.clear.frame(height: ui.notch.height)
+            VStack(spacing: 6) {
+                ForEach(ui.bubbles) { m in
+                    Bubble(message: m, showName: true).transition(.bubble)
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 8)
+            .padding(.bottom, 14)
+            .modifier(EdgeFade(top: 0.1, bottom: 0.08))
+        }
+        .frame(width: ui.notch.width + 150)
+        .contentShape(Rectangle())
+        .onTapGesture { onOpen() }
+    }
+}
+
+struct ChatView: View {
+    @Environment(\.palette) private var pal
+    @Bindable var ui: NotchUI
+    var onSend: (String) -> Void
+    var onClose: () -> Void
+    @State private var draft = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 0) {
+                Text("chat").foregroundStyle(pal.dim)
+                Spacer(minLength: ui.notch.width + 16)
+                PeopleIcon(count: ui.people).foregroundStyle(pal.dim)
+                Button(action: onClose) {
+                    Image(systemName: "xmark").font(.system(size: 10, weight: .bold)).foregroundStyle(pal.dim)
+                        .frame(width: 22, height: 22).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, 8)
+            }
+            .font(geist(12, .semibold))
+            .frame(height: ui.notch.height)
+
+            if ui.snapshot {
+                // ImageRenderer can't draw a ScrollView; show the same list without it.
+                list.frame(height: 132, alignment: .bottom).clipped().modifier(EdgeFade())
+            } else {
+            ScrollViewReader { proxy in
+                ScrollView(.vertical) { list }
+                .scrollIndicators(.hidden)
+                .defaultScrollAnchor(.bottom)
+                .frame(height: 132)
+                .modifier(EdgeFade())
+                .onChange(of: ui.messages.count) {
+                    if let last = ui.messages.last { withAnimation(fluid) { proxy.scrollTo(last.id, anchor: .bottom) } }
+                }
+            }
+            }
+
+            HStack(spacing: 8) {
+                Group {
+                    if ui.snapshot {
+                        Text(draft.isEmpty ? "mensaje…" : draft).foregroundStyle(pal.dim)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        TextField("", text: $draft, prompt: Text("mensaje…").foregroundStyle(pal.dim))
+                            .textFieldStyle(.plain)
+                            .foregroundStyle(pal.fg)
+                            .tint(bubbleGreen)
+                            .focused($focused)
+                            .onSubmit(send)
+                            .onExitCommand(perform: onClose)
+                            .onChange(of: focused) { _, f in ui.editing = f }
+                    }
+                }
+                .font(geist(13, .medium))
+                Button(action: send) {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(draft.trimmingCharacters(in: .whitespaces).isEmpty ? pal.dim : bubbleGreen)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.leading, 14)
+            .padding(.trailing, 5)
+            .frame(height: 32)
+            .background(Capsule().fill(pal.fg.opacity(0.08)))
+        }
+        .padding(.horizontal, 24)
+        .padding(.bottom, 14)
+        .frame(width: ui.notch.width + 240)
+        .onAppear { if !ui.snapshot { focused = true } }
+    }
+
+    private var list: some View {
+        VStack(spacing: 6) {
+            if ui.messages.isEmpty {
+                Text("escríbele al grupo").font(geist(12, .medium)).foregroundStyle(pal.dim)
+                    .frame(maxWidth: .infinity).padding(.top, 48)
+            }
+            ForEach(ui.messages) { m in
+                Bubble(message: m, showName: ui.people > 2).id(m.id).transition(.bubble)
+            }
+        }
+        .padding(.vertical, 14)
+        .padding(.horizontal, 6)
+    }
+
+    private func send() {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        onSend(String(text.prefix(200)))
+        draft = ""
     }
 }

@@ -39,6 +39,16 @@ enum Snapshot {
             ("11-group-expanded", { app.setExpanded(true); pomo.task = "landing nueva" }),
             ("12-pair-live", { app.setExpanded(false); app.ui.mates = [Mate(id: "1", name: "juan", task: "tesis")] }),
             ("13-trio-live", { app.ui.mates.append(Mate(id: "2", name: "ana", task: "")) }),
+            ("14-bubble", { app.receiveChat(from: "juan", "¿hacemos 2 más antes de almorzar?") }),
+            ("15-bubbles", { app.receiveChat(from: "ana", "dale 🙌") }),
+            ("16-live-unread", { app.ui.bubbles = [] }),
+            ("17-chat", {
+                app.ui.messages = [ChatMessage(from: "juan", text: "¿hacemos 2 más antes de almorzar?", mine: false),
+                                   ChatMessage(from: "ana", text: "dale", mine: false),
+                                   ChatMessage(from: "tú", text: "sí, pero el próximo descanso largo", mine: true),
+                                   ChatMessage(from: "juan", text: "perfecto, parto yo", mine: false)]
+                app.openChat()
+            }),
         ]
 
         var i = 0
@@ -66,7 +76,7 @@ enum Snapshot {
                 .stroke(Color.red.opacity(0.8), lineWidth: 1)
                 .frame(width: n.width, height: n.height)
         }
-        .frame(width: 560, height: 170)
+        .frame(width: 560, height: 250)
         let r = ImageRenderer(content: view)
         r.scale = 2
         guard let cg = r.cgImage else { print("render failed", name); return }

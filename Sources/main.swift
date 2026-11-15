@@ -83,6 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var toastExpire: (() -> Void)?
     var finishToast: UUID?
     var snapshotting = false
+    var bubbleWork: [UUID: DispatchWorkItem] = [:]
     lazy var pomo = Pomodoro(log: MarkdownLog(url: logURL), unit: env["POMO_FAST"] == "1" ? 1 : 60)
     let ui = NotchUI()
     var panel: NotchPanel!
@@ -104,7 +105,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let root = NotchView(ui: ui, pomo: pomo,
                              onToastAction: { [weak self] in self?.runToastAction() },
                              onEndEditing: { [weak self] in self?.endEditing() },
-                             onTogether: { [weak self] in self?.togetherTapped() })
+                             onTogether: { [weak self] in self?.togetherTapped() },
+                             onOpenChat: { [weak self] in self?.openChat() },
+                             onCloseChat: { [weak self] in self?.closeChat() },
+                             onSend: { [weak self] text in self?.sendChat(text) })
         host = HostView(rootView: root)
         host.sizingOptions = []
         host.menuProvider = { [weak self] in self?.menu() ?? NSMenu() }
@@ -285,7 +289,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func mouseEntered() {
         trace("entered")
         collapseWork?.cancel()
-        guard !ui.expanded, ui.toast == nil else { return }
+        guard !ui.expanded, !ui.chatOpen, ui.toast == nil else { return }
         let w = DispatchWorkItem { [weak self] in self?.setExpanded(true) }
         expandWork = w
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: w)
@@ -294,9 +298,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func mouseExited() {
         trace("exited")
         expandWork?.cancel()
-        guard ui.expanded, !ui.editing else { return }
+        guard ui.expanded || ui.chatOpen, !ui.editing else { return }
         let w = DispatchWorkItem { [weak self] in
             guard let self, !self.mouseInside, !self.ui.editing else { return }
+            self.closeChat()
             self.setExpanded(false)
         }
         collapseWork = w
@@ -327,6 +332,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func windowDidResignKey(_ n: Notification) {
         guard ui.editing else { return }
         ui.editing = false
+        if ui.chatOpen {
+            if !mouseInside { closeChat() }
+            return
+        }
         pomo.saveTask()
         together.send(task: pomo.task)
         if !mouseInside { setExpanded(false) }
@@ -401,6 +410,66 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         a?()
     }
 
+    // MARK: chat
+
+    func openChat() {
+        guard together.connected || snapshotting else { return }
+        collapseWork?.cancel()
+        bubbleWork.values.forEach { $0.cancel() }
+        bubbleWork = [:]
+        withAnimation(openSpring) {
+            ui.bubbles = []
+            ui.unread = 0
+            ui.chatOpen = true
+        }
+        // Key window for the message field; the app itself stays in the background.
+        panel.makeKey()
+    }
+
+    func closeChat() {
+        guard ui.chatOpen else { return }
+        ui.editing = false
+        if panel.isKeyWindow {
+            panel.makeFirstResponder(nil)
+            panel.orderOut(nil)
+            panel.orderFrontRegardless()
+        }
+        withAnimation(fluid) {
+            ui.chatOpen = false
+            ui.expanded = mouseInside
+        }
+    }
+
+    func sendChat(_ text: String) {
+        together.send(msg: text)
+        withAnimation(fluid) { appendMessage(ChatMessage(from: "tú", text: text, mine: true)) }
+    }
+
+    /// Chat open: it lands in the list. Closed: it peeks out under the camera for 6 s and blurs away.
+    func receiveChat(from name: String, _ text: String) {
+        let m = ChatMessage(from: name, text: text, mine: false)
+        withAnimation(fluid) { appendMessage(m) }
+        guard !ui.chatOpen else { return }
+        if soundOn && !snapshotting { NSSound(named: "Tink")?.play() }
+        withAnimation(openSpring) {
+            ui.unread += 1
+            ui.bubbles.append(m)
+            if ui.bubbles.count > 3 { ui.bubbles.removeFirst(ui.bubbles.count - 3) }
+        }
+        let w = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.bubbleWork[m.id] = nil
+            withAnimation(fluid) { self.ui.bubbles.removeAll { $0.id == m.id } }
+        }
+        bubbleWork[m.id] = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6, execute: w)
+    }
+
+    func appendMessage(_ m: ChatMessage) {
+        ui.messages.append(m)
+        if ui.messages.count > 40 { ui.messages.removeFirst(ui.messages.count - 40) }
+    }
+
     // MARK: juntos
 
     func setupTogether() {
@@ -454,6 +523,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.peerTasks[peer] = task
             self?.syncMates()
         }
+        t.onPeerMessage = { [weak self] peer, text in self?.receiveChat(from: peer.displayName, text) }
         t.onSearchEnded = { [weak self] in
             self?.show(Toast(icon: .info, title: "no encontré a nadie cerca", action: nil), seconds: 4)
         }
@@ -469,6 +539,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             t.onInvite = { peer, reply in
                 invited?(peer, reply)
                 reply(true)
+            }
+            let joined = t.onConnected
+            t.onConnected = { [weak self] peer, mine in
+                joined?(peer, mine)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self?.sendChat("hola") }
             }
             t.search(seconds: 60)
         }

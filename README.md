@@ -39,12 +39,14 @@ También puedes actualizar con `brew upgrade --cask pomodoro`, o con `git pull &
 | Cambiar la duración | Clic en el tiempo grande: aparecen − y + (también sirve el scroll) |
 | Anotar en qué estás | Escribe en "¿en qué estás?" y Enter |
 | Hacer pomodoros con alguien cerca | Botón de dos personas; la otra persona hace lo mismo |
+| Escribirle al grupo | Globito junto al botón de personas: mensajes como burbujas verdes |
 | Duraciones, registro, sonido, calendario | Clic derecho en el notch |
 
 - **Notch cerrado:** muestra el anillo de progreso y el tiempo, una taza en los descansos, y
   un ícono de personas cuando estás en grupo.
 - **Juntos:** usa Wi-Fi, en la misma red o directo entre los Mac. Caben hasta 8 personas y
   se comparten play, pausa, saltar y duraciones; cada uno guarda su propio registro.
+- **Chat:** con el notch cerrado, los mensajes que llegan se asoman bajo la cámara y se desvanecen a los 6 segundos. El globito queda verde mientras haya mensajes sin leer.
 - **Registro:** cada foco terminado queda en `~/Documents/pomodoros.md`.
 - **Calendario:** opcional, se activa con clic derecho → calendario.
 

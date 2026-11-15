@@ -20,6 +20,7 @@ struct SyncState: Codable, Equatable {
 struct Wire: Codable {
     var state: SyncState?
     var task: String?
+    var msg: String?
 }
 
 /// "Pomodoros juntos" over MultipeerConnectivity, for a group of up to 8 Macs. On the Mac
@@ -67,6 +68,7 @@ final class Together: NSObject, MCSessionDelegate, MCNearbyServiceAdvertiserDele
     var onDisconnected: ((MCPeerID) -> Void)?
     var onState: ((SyncState) -> Void)?
     var onPeerTask: ((MCPeerID, String) -> Void)?
+    var onPeerMessage: ((MCPeerID, String) -> Void)?
     var onSearchEnded: (() -> Void)?
 
     override init() {
@@ -166,9 +168,9 @@ final class Together: NSObject, MCSessionDelegate, MCNearbyServiceAdvertiserDele
         browser.invitePeer(peer, to: session, withContext: nil, timeout: 30)
     }
 
-    func send(state: SyncState? = nil, task: String? = nil, to target: [MCPeerID]? = nil) {
+    func send(state: SyncState? = nil, task: String? = nil, msg: String? = nil, to target: [MCPeerID]? = nil) {
         let to = target ?? peers
-        guard let session, !to.isEmpty, let data = try? JSONEncoder().encode(Wire(state: state, task: task)) else { return }
+        guard let session, !to.isEmpty, let data = try? JSONEncoder().encode(Wire(state: state, task: task, msg: msg)) else { return }
         try? session.send(data, toPeers: to, with: .reliable)
     }
 
@@ -280,6 +282,10 @@ final class Together: NSObject, MCSessionDelegate, MCNearbyServiceAdvertiserDele
         DispatchQueue.main.async {
             guard self.peers.contains(peerID) else { return }
             if let t = wire.task { self.onPeerTask?(peerID, t) }
+            if let m = wire.msg {
+                self.log("message from \(peerID.displayName) (\(m.count) chars)")
+                self.onPeerMessage?(peerID, String(m.prefix(200)))
+            }
             if let s = wire.state { self.onState?(s) }
         }
     }
