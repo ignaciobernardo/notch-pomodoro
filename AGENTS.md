@@ -42,6 +42,18 @@ Open Anyway. Don't strip the quarantine attribute yourself unless the user asks.
 - **Calendar:** only if they turn on right-click → calendario.
 - The app is ad-hoc signed, so macOS may ask again for these permissions after an update.
 
+## If "juntos" misbehaves
+
+Connection events (found, invite, accepted, connected, disconnected) are logged. Read them with:
+
+```sh
+/usr/bin/log show --last 30m --predicate 'subsystem == "cl.natochi.notch-pomodoro"'
+```
+
+Use `/usr/bin/log`, not `log`: in zsh, `log` can hit a shell builtin. Apple's lower-level detail is under
+`subsystem == "com.apple.multipeerconnectivity"`. A "Heartbeat timeout … No route to participant"
+there means the Wi-Fi link between the Macs (AWDL) dropped.
+
 ## Where things live
 
 | What | Where |
