@@ -128,8 +128,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         setupTogether()
 
         place(ui.notch)
-        if env["POMO_SNAPSHOT"] != nil {
-            // Renders go through ImageRenderer; keep the window invisible and out of the way.
+        if env["POMO_SNAPSHOT"] != nil || env["POMO_HEADLESS"] == "1" {
+            // Renders go through ImageRenderer / tests run unseen: keep the window invisible and out of the way.
             panel.alphaValue = 0
             snapshotting = true
         }
@@ -406,8 +406,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func setupTogether() {
         let t = together
         t.onChange = { [weak self] in self?.syncMates() }
-        t.onFound = { [weak self] peer in
+        t.onFound = { [weak self] peer, weInvite in
             guard let self else { return }
+            guard weInvite else {
+                // The other Mac invites; we just wait for its invitation to arrive.
+                self.show(Toast(icon: .people, title: "\(peer.displayName) está cerca · esperando que conecte", action: nil), seconds: 20)
+                return
+            }
             self.toastAction = { [weak self] in
                 guard let self else { return }
                 self.together.invite(peer)
@@ -453,6 +458,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.show(Toast(icon: .info, title: "no encontré a nadie cerca", action: nil), seconds: 4)
         }
         pomo.onLocalChange = { [weak self] in self?.queueSend() }
+
+        // Debug (two copies on one Mac): search at launch, invite and accept on their own.
+        if env["POMO_JUNTOS_AUTO"] == "1" {
+            let found = t.onFound, invited = t.onInvite
+            t.onFound = { [weak self] peer, weInvite in
+                found?(peer, weInvite)
+                if weInvite { self?.together.invite(peer) }
+            }
+            t.onInvite = { peer, reply in
+                invited?(peer, reply)
+                reply(true)
+            }
+            t.search(seconds: 60)
+        }
     }
 
     func syncMates() {

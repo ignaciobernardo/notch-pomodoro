@@ -21,7 +21,7 @@ build/tools/sign "$KEY" build/Pomodoro.zip > build/Pomodoro.zip.sig
 SHA=$(shasum -a 256 build/Pomodoro.zip | cut -d' ' -f1)
 
 git add VERSION
-git commit -q -m "v$V"
+git diff --cached --quiet || git commit -q -m "v$V"
 git tag "v$V"
 git push -q origin HEAD --tags
 gh release create "v$V" build/Pomodoro.zip build/Pomodoro.zip.sig --title "v$V" --notes "$NOTES"

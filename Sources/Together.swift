@@ -39,6 +39,8 @@ final class Together: NSObject, MCSessionDelegate, MCNearbyServiceAdvertiserDele
     private var stopWork: DispatchWorkItem?
     private var invitedByMe = Set<MCPeerID>()
     private var announced = Set<MCPeerID>()
+    /// Stable random id, advertised so two Macs that find each other agree on who invites.
+    private let uid: String
 
     private(set) var peers: [MCPeerID] = []
     var searching: Bool { advertiser != nil }
@@ -46,7 +48,9 @@ final class Together: NSObject, MCSessionDelegate, MCNearbyServiceAdvertiserDele
 
     // All callbacks arrive on the main thread.
     var onChange: (() -> Void)?
-    var onFound: ((MCPeerID) -> Void)?
+    /// A peer is nearby. The Bool says whether WE should invite them; the other side only waits.
+    /// Only one side ever invites: two crossing invitations make MPC drop the link right after connecting.
+    var onFound: ((MCPeerID, Bool) -> Void)?
     var onInvite: ((MCPeerID, @escaping (Bool) -> Void) -> Void)?
     /// A peer joined; the Bool says whether we invited them (then we hand them the timer).
     var onConnected: ((MCPeerID, Bool) -> Void)?
@@ -57,6 +61,12 @@ final class Together: NSObject, MCSessionDelegate, MCNearbyServiceAdvertiserDele
 
     override init() {
         let d = UserDefaults.standard
+        if let saved = d.string(forKey: "peerUID") {
+            uid = saved
+        } else {
+            uid = UUID().uuidString
+            d.set(uid, forKey: "peerUID")
+        }
         let first = NSFullUserName().split(separator: " ").first.map { String($0).lowercased() }
         let name = first ?? Host.current().localizedName ?? "mac"
         if let data = d.data(forKey: "peerID"),
@@ -83,7 +93,8 @@ final class Together: NSObject, MCSessionDelegate, MCNearbyServiceAdvertiserDele
             session = s
         }
         announced = Set(peers)
-        let a = MCNearbyServiceAdvertiser(peer: me, discoveryInfo: nil, serviceType: Self.service)
+        let info = ["id": uid, "g": connected ? "1" : "0"]
+        let a = MCNearbyServiceAdvertiser(peer: me, discoveryInfo: info, serviceType: Self.service)
         a.delegate = self
         let b = MCNearbyServiceBrowser(peer: me, serviceType: Self.service)
         b.delegate = self
@@ -116,8 +127,9 @@ final class Together: NSObject, MCSessionDelegate, MCNearbyServiceAdvertiserDele
     }
 
     func invite(_ peer: MCPeerID) {
-        guard let session, let browser else { return }
+        guard let session, let browser, !invitedByMe.contains(peer), !peers.contains(peer) else { return }
         invitedByMe.insert(peer)
+        log("invite → \(peer.displayName)")
         browser.invitePeer(peer, to: session, withContext: nil, timeout: 30)
     }
 
@@ -142,8 +154,22 @@ final class Together: NSObject, MCSessionDelegate, MCNearbyServiceAdvertiserDele
     func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID, withDiscoveryInfo info: [String: String]?) {
         DispatchQueue.main.async {
             guard peerID != self.me, !self.peers.contains(peerID), !self.announced.contains(peerID) else { return }
+            let theirID = info?["id"] ?? peerID.displayName
+            let theirGroup = info?["g"] == "1"
+            // A group grows from inside: whoever is already in one invites. Two groups don't merge.
+            // Otherwise the smaller id invites, so both sides never invite each other.
+            let weInvite: Bool
+            if self.connected && theirGroup {
+                self.log("found \(peerID.displayName), both in groups: ignored")
+                return
+            } else if self.connected != theirGroup {
+                weInvite = self.connected
+            } else {
+                weInvite = self.uid < theirID
+            }
             self.announced.insert(peerID)
-            self.onFound?(peerID)
+            self.log("found \(peerID.displayName) (we invite: \(weInvite))")
+            self.onFound?(peerID, weInvite)
         }
     }
 
@@ -154,8 +180,14 @@ final class Together: NSObject, MCSessionDelegate, MCNearbyServiceAdvertiserDele
     func advertiser(_ advertiser: MCNearbyServiceAdvertiser, didReceiveInvitationFromPeer peerID: MCPeerID,
                     withContext context: Data?, invitationHandler: @escaping (Bool, MCSession?) -> Void) {
         DispatchQueue.main.async {
+            self.log("invitation from \(peerID.displayName)")
             // Already in a group: people join it through our own invitations, not by pulling us out.
-            guard let session = self.session, !self.connected else { invitationHandler(false, nil); return }
+            // Already inviting them: ours stands, theirs would cross it.
+            guard let session = self.session, !self.connected, !self.invitedByMe.contains(peerID) else {
+                self.log("declined invitation from \(peerID.displayName)")
+                invitationHandler(false, nil)
+                return
+            }
             var answered = false
             self.onInvite?(peerID) { accept in
                 guard !answered else { return }
@@ -169,18 +201,27 @@ final class Together: NSObject, MCSessionDelegate, MCNearbyServiceAdvertiserDele
 
     func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
         DispatchQueue.main.async {
+            self.log("\(peerID.displayName): \(state == .connected ? "connected" : state == .connecting ? "connecting" : "not connected") (session \(session === self.session ? "current" : "stale"))")
             guard session === self.session else { return }
             switch state {
             case .connected:
                 guard !self.peers.contains(peerID) else { return }
                 self.peers.append(peerID)
                 let mine = self.invitedByMe.remove(peerID) != nil
-                if self.searching { self.stopSearching() }
+                // Stop discovery a moment later: tearing it down in the same instant can drop a fresh link.
+                if self.searching {
+                    self.stopWork?.cancel()
+                    let w = DispatchWorkItem { [weak self] in self?.stopSearching() }
+                    self.stopWork = w
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: w)
+                }
                 self.onChange?()
                 self.onConnected?(peerID, mine)
             case .notConnected:
                 self.invitedByMe.remove(peerID)
                 guard let i = self.peers.firstIndex(of: peerID) else { return }
+                // A failed second attempt reports "not connected" while the real link is still up.
+                if session.connectedPeers.contains(peerID) { return }
                 self.peers.remove(at: i)
                 if self.peers.isEmpty && !self.searching {
                     self.session?.disconnect()
@@ -202,6 +243,15 @@ final class Together: NSObject, MCSessionDelegate, MCNearbyServiceAdvertiserDele
             if let s = wire.state { self.onState?(s) }
         }
     }
+
+    func session(_ session: MCSession, didReceiveCertificate certificate: [Any]?, fromPeer peerID: MCPeerID,
+                 certificateHandler: @escaping (Bool) -> Void) {
+        certificateHandler(true)
+    }
+
+    /// Connection events only (never per tick). Read them with:
+    /// log show --last 30m --predicate 'process == "Pomodoro" AND eventMessage CONTAINS "[juntos]"'
+    private func log(_ m: String) { NSLog("[juntos] %@", m) }
 
     func session(_ session: MCSession, didReceive stream: InputStream, withName streamName: String, fromPeer peerID: MCPeerID) {}
     func session(_ session: MCSession, didStartReceivingResourceWithName resourceName: String, fromPeer peerID: MCPeerID, with progress: Progress) {}
