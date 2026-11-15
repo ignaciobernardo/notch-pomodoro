@@ -54,6 +54,15 @@ Sin un pomodoro corriendo no hace nada: 0 % de CPU, ningún timer, unos 12 MB. C
 despierta una vez por segundo para el reloj (≈0,2 % de CPU). No revisa el mouse en loop, y
 el modo juntos solo manda mensajes cuando alguien toca algo.
 
+## Próximas cosas
+
+1. [Elegir un nombre al instalar](https://github.com/ignaciobernardo/notch-pomodoro/issues/1)
+2. [Bloqueador de sitios durante el foco, con aviso al grupo](https://github.com/ignaciobernardo/notch-pomodoro/issues/2)
+3. [Saber en qué se fue cada pomodoro y preguntar para ser honesto](https://github.com/ignaciobernardo/notch-pomodoro/issues/3)
+4. [Estimar cuántos pomodoros toma una tarea](https://github.com/ignaciobernardo/notch-pomodoro/issues/4)
+
+Todas en [issues con la etiqueta «próximo»](https://github.com/ignaciobernardo/notch-pomodoro/issues?q=is%3Aopen+label%3Apr%C3%B3ximo).
+
 ## Desarrollo
 
 ```sh
